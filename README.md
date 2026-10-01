@@ -6,7 +6,7 @@ A cookbook of the world. Anyone can add a recipe — it appears on the site afte
 
 ---
 
-## Add a recipe (no programming needed)
+## Add a recipe 
 
 You only need a GitHub account and a web browser.
 
@@ -44,7 +44,7 @@ ingredients:
 Write the steps here, in plain words, as paragraphs.
 ```
 
-### The rules, in plain words
+### The rules
 
 - **`title`** (required) — the name of the dish.
 - **`country`** (required) — where the recipe is from, as a **2-letter code**: `IN` for India, `MY` for Malaysia, `GB` for Britain. Full list: [ISO 3166-1 alpha-2](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2). Disputed or mixed origin? A list is fine: `country: [IN, PK]`.
