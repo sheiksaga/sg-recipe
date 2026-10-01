@@ -5,10 +5,10 @@ import enLocale from 'i18n-iso-countries/langs/en.json';
 import Base from '../layouts/Base.astro';
 import WorldMap from '../components/WorldMap.astro';
 import regions from '../../data/regions.json';
+import { base } from '../lib/base';
 
 countries.registerLocale(enLocale);
 
-const base = import.meta.env.BASE_URL;
 const recipes = await getCollection('recipes');
 
 const highlighted: Record<string, number> = {};

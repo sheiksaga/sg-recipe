@@ -4,6 +4,7 @@ import { geoEqualEarth, geoPath } from 'd3-geo';
 import countries from 'i18n-iso-countries';
 import enLocale from 'i18n-iso-countries/langs/en.json';
 import world from 'world-atlas/countries-110m.json';
+import { base } from '../lib/base';
 
 countries.registerLocale(enLocale);
 
@@ -29,7 +30,6 @@ function toAlpha2(id: string | number): string | undefined {
   }
 }
 
-const base = import.meta.env.BASE_URL;
 
 const shapes = (land.features as any[]).flatMap((f) => {
   const d = pathGen(f);
