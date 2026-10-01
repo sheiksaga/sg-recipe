@@ -1,0 +1,125 @@
+---
+import { getCollection } from 'astro:content';
+import countries from 'i18n-iso-countries';
+import enLocale from 'i18n-iso-countries/langs/en.json';
+import Base from '../layouts/Base.astro';
+import WorldMap from '../components/WorldMap.astro';
+import regions from '../../data/regions.json';
+
+countries.registerLocale(enLocale);
+
+const base = import.meta.env.BASE_URL;
+const recipes = await getCollection('recipes');
+
+const highlighted: Record<string, number> = {};
+const dots: { lat: number; lon: number; label: string; href: string }[] = [];
+
+const index = recipes
+  .map((r) => {
+    const d = r.data;
+    for (const c of d.country) highlighted[c] = (highlighted[c] ?? 0) + 1;
+
+    if (d.region) {
+      const info = (regions as Record<string, { lat: number; lon: number }>)[d.region.toLowerCase()];
+      if (info) {
+        dots.push({ lat: info.lat, lon: info.lon, label: `${d.region} — ${d.title}`, href: `${base}recipes/${r.id}/` });
+      } else {
+        console.warn(`[sg-recipe] unknown region "${d.region}" in ${r.id} — add it to data/regions.json`);
+      }
+    }
+
+    return {
+      slug: r.id,
+      title: d.title,
+      country: d.country,
+      countryNames: d.country.map((c) => countries.getName(c, 'en') ?? c).join(', '),
+      region: d.region ?? '',
+      cuisine: [d.cuisine, d.subcuisine].filter(Boolean).join(', '),
+      tags: d.tags ?? [],
+      ingredients: d.ingredients.map((i) => (typeof i === 'string' ? i : i.item)),
+    };
+  })
+  .sort((a, b) => a.title.localeCompare(b.title));
+---
+
+<Base title="Recipes of the world">
+  <h1>sg-recipe</h1>
+  <p>A cookbook of the world. Every recipe comes from someone, somewhere — click the map or search below.</p>
+
+  <WorldMap highlighted={highlighted} dots={dots} />
+
+  <p class="search-row">
+    <input id="q" type="search" placeholder="Search a dish, ingredient, or place…" aria-label="Search recipes" />
+  </p>
+  <p id="filter-note" hidden></p>
+
+  <ul id="results">
+    {
+      index.map((item) => (
+        <li data-slug={item.slug}>
+          <a href={`${base}recipes/${item.slug}/`}>{item.title}</a>
+          <span class="where">
+            {' '}
+            — {item.countryNames}
+            {item.region ? `, ${item.region}` : ''}
+          </span>
+        </li>
+      ))
+    }
+  </ul>
+
+  <script is:inline define:vars={{ index, base, allCountryNames: countries.getNames('en') }}>
+    const params = new URLSearchParams(location.search);
+    let country = params.get('country') ?? '';
+    const q = document.getElementById('q');
+    const note = document.getElementById('filter-note');
+
+    function apply() {
+      const needle = q.value.trim().toLowerCase();
+      for (const item of index) {
+        const el = document.querySelector(`li[data-slug="${item.slug}"]`);
+        if (!el) continue;
+        const inCountry = !country || item.country.includes(country);
+        const hay = [item.title, item.countryNames, item.region, item.cuisine, ...item.tags, ...item.ingredients]
+          .join(' ')
+          .toLowerCase();
+        el.hidden = !(inCountry && (!needle || hay.includes(needle)));
+      }
+      if (country) {
+        note.hidden = false;
+        note.innerHTML = '';
+        const label = document.createElement('span');
+        label.textContent = `Showing recipes from ${allCountryNames[country] ?? country}. `;
+        const clear = document.createElement('a');
+        clear.href = base;
+        clear.textContent = 'Show all';
+        note.append(label, clear);
+      } else {
+        note.hidden = true;
+      }
+    }
+
+    q.addEventListener('input', apply);
+    apply();
+  </script>
+
+  <style>
+    .search-row input {
+      width: 100%;
+      font: inherit;
+      padding: 0.4rem 0.5rem;
+      border: 1px solid #000;
+      background: #fff;
+      color: #000;
+    }
+    #results {
+      padding-left: 1.25rem;
+    }
+    #results li {
+      margin: 0.35rem 0;
+    }
+    .where {
+      font-size: 0.9rem;
+    }
+  </style>
+</Base>

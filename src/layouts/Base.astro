@@ -1,0 +1,51 @@
+---
+interface Props {
+  title: string;
+}
+const { title } = Astro.props;
+const base = import.meta.env.BASE_URL;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title} — sg-recipe</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body {
+        font-family: Georgia, 'Times New Roman', 'Nimbus Roman', serif;
+        color: #000;
+        background: #fff;
+        max-width: 42rem;
+        margin: 0 auto;
+        padding: 2rem 1.25rem 4rem;
+        line-height: 1.55;
+      }
+      a { color: #000; text-decoration: underline; }
+      a:hover { background: #000; color: #fff; text-decoration: none; }
+      h1 { font-size: 1.6rem; letter-spacing: 0.02em; }
+      h1, h2, h3 { font-weight: normal; }
+      nav { display: flex; justify-content: space-between; border-bottom: 1px solid #000; padding-bottom: 0.5rem; margin-bottom: 2rem; }
+      nav a { text-decoration: none; }
+      footer { margin-top: 4rem; border-top: 1px solid #000; padding-top: 0.5rem; font-size: 0.85rem; }
+      dl.meta { display: grid; grid-template-columns: auto 1fr; gap: 0.1rem 1rem; }
+      dl.meta dt { font-weight: bold; }
+      dl.meta dd { margin: 0; }
+      hr { border: none; border-top: 1px solid #000; margin: 2rem 0; }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <a href={base}>sg-recipe</a>
+      <a href="https://github.com/sheiksaga/sg-recipe">contribute</a>
+    </nav>
+    <main>
+      <slot />
+    </main>
+    <footer>
+      Recipes are licensed <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a> — credit the author, share alike.
+    </footer>
+  </body>
+</html>

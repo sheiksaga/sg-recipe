@@ -1,0 +1,101 @@
+---
+import { feature } from 'topojson-client';
+import { geoEqualEarth, geoPath } from 'd3-geo';
+import countries from 'i18n-iso-countries';
+import enLocale from 'i18n-iso-countries/langs/en.json';
+import world from 'world-atlas/countries-110m.json';
+
+countries.registerLocale(enLocale);
+
+interface Props {
+  /** alpha-2 code -> recipe count */
+  highlighted: Record<string, number>;
+  dots: { lat: number; lon: number; label: string; href: string }[];
+}
+
+const { highlighted, dots } = Astro.props;
+
+const width = 960;
+const height = 500;
+const land = feature(world as any, (world as any).objects.countries) as any;
+const projection = geoEqualEarth().fitSize([width, height], { type: 'Sphere' } as any);
+const pathGen = geoPath(projection as any);
+
+function toAlpha2(id: string | number): string | undefined {
+  try {
+    return countries.numericToAlpha2(String(id).padStart(3, '0')) as string | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const base = import.meta.env.BASE_URL;
+
+const shapes = (land.features as any[]).flatMap((f) => {
+  const d = pathGen(f);
+  if (!d) return [];
+  const code = toAlpha2(f.id);
+  const count = code ? highlighted[code] : undefined;
+  const name = (code && countries.getName(code, 'en')) || f.properties?.name || 'Unknown';
+  return [{ d, code, count, name }];
+});
+
+const points = dots.flatMap((dot) => {
+  const p = projection([dot.lon, dot.lat]);
+  return p ? [{ x: p[0], y: p[1], label: dot.label, href: dot.href }] : [];
+});
+---
+
+<svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="World map of recipe origins" class="world-map">
+  {
+    shapes.map((s) =>
+      s.count ? (
+        <a href={`${base}?country=${s.code}`} aria-label={`${s.name} — ${s.count} recipe${s.count > 1 ? 's' : ''}`}>
+          <path d={s.d} class="has-recipes">
+            <title>{`${s.name} — ${s.count} recipe${s.count > 1 ? 's' : ''}`}</title>
+          </path>
+        </a>
+      ) : (
+        <path d={s.d}>
+          <title>{s.name}</title>
+        </path>
+      ),
+    )
+  }
+  {
+    points.map((p) => (
+      <a href={p.href} aria-label={p.label}>
+        <circle cx={p.x} cy={p.y} r="5" class="dot">
+          <title>{p.label}</title>
+        </circle>
+      </a>
+    ))
+  }
+</svg>
+
+<style>
+  .world-map {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+  .world-map path {
+    fill: #fff;
+    stroke: #000;
+    stroke-width: 0.5;
+  }
+  .world-map path.has-recipes {
+    fill: #000;
+  }
+  .world-map a:hover path {
+    fill: #555;
+  }
+  .world-map circle.dot {
+    fill: #000;
+    stroke: #fff;
+    stroke-width: 1.5;
+  }
+  .world-map a:hover circle.dot {
+    fill: #555;
+  }
+</style>

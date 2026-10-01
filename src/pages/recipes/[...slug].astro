@@ -1,0 +1,118 @@
+---
+import { getCollection, render } from 'astro:content';
+import countries from 'i18n-iso-countries';
+import enLocale from 'i18n-iso-countries/langs/en.json';
+import Base from '../../layouts/Base.astro';
+
+countries.registerLocale(enLocale);
+
+export async function getStaticPaths() {
+  const recipes = await getCollection('recipes');
+  return recipes.map((recipe) => ({ params: { slug: recipe.id }, props: { recipe } }));
+}
+
+const { recipe } = Astro.props;
+const { Content } = await render(recipe);
+const d = recipe.data;
+
+const countryNames = d.country.map((c: string) => countries.getName(c, 'en') ?? c).join(', ');
+
+const groups = new Map<string, (string | { item: string; qty?: unknown; unit?: string; prep?: string; note?: string })[]>();
+for (const ing of d.ingredients) {
+  const g = typeof ing === 'string' ? '' : (ing.group ?? '');
+  if (!groups.has(g)) groups.set(g, []);
+  groups.get(g)!.push(ing);
+}
+
+function ingredientText(ing: unknown): string {
+  if (typeof ing === 'string') return ing;
+  const o = ing as { item: string; qty?: unknown; unit?: string; prep?: string; note?: string };
+  return [
+    o.qty != null ? String(o.qty) : '',
+    o.unit ?? '',
+    o.item,
+    o.prep ? `(${o.prep})` : '',
+    o.note ? `— ${o.note}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+const author = typeof d.author === 'string' ? { name: d.author } : d.author;
+const hasGroups = groups.size > 1 || (groups.size === 1 && !groups.has(''));
+---
+
+<Base title={d.title}>
+  <article>
+    <h1>{d.title}</h1>
+
+    <dl class="meta">
+      <dt>From</dt>
+      <dd>{countryNames}{d.region ? `, ${d.region}` : ''}</dd>
+      {d.cuisine && (
+        <>
+          <dt>Cuisine</dt>
+          <dd>{[d.cuisine, d.subcuisine].filter(Boolean).join(', ')}</dd>
+        </>
+      )}
+      {d.difficulty && (
+        <>
+          <dt>Difficulty</dt>
+          <dd>{d.difficulty}</dd>
+        </>
+      )}
+      {d.servings && (
+        <>
+          <dt>Serves</dt>
+          <dd>{d.servings}</dd>
+        </>
+      )}
+      {d.prep_minutes && (
+        <>
+          <dt>Prep</dt>
+          <dd>{d.prep_minutes} min</dd>
+        </>
+      )}
+      {d.cook_minutes && (
+        <>
+          <dt>Cook</dt>
+          <dd>{d.cook_minutes} min</dd>
+        </>
+      )}
+    </dl>
+
+    <h2>Ingredients</h2>
+    {
+      [...groups.entries()].map(([group, items]) => (
+        <section>
+          {hasGroups && group && <h3>{group}</h3>}
+          <ul>
+            {items.map((ing) => (
+              <li>{ingredientText(ing)}</li>
+            ))}
+          </ul>
+        </section>
+      ))
+    }
+
+    <Content />
+
+    <hr />
+    <p class="credit">
+      Contributed by{' '}
+      {author?.url ? <a href={author.url}>{author.name}</a> : (author?.name ?? 'an anonymous cook')}.
+      {d.source && <> Source: {d.source}.</>}
+    </p>
+  </article>
+
+  <style>
+    h3 {
+      text-transform: capitalize;
+      font-size: 1rem;
+      margin-bottom: 0.25rem;
+    }
+    .credit {
+      font-size: 0.9rem;
+    }
+  </style>
+</Base>
