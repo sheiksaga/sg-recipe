@@ -1,26 +1,102 @@
 ---
 import { feature } from 'topojson-client';
-import { geoEqualEarth, geoPath } from 'd3-geo';
+import { geoPath, geoProjection } from 'd3-geo';
 import countries from 'i18n-iso-countries';
 import enLocale from 'i18n-iso-countries/langs/en.json';
-import world from 'world-atlas/countries-110m.json';
+import worldRaw from 'world-atlas/countries-50m.json';
+import topojsonSimplify from 'topojson-simplify';
 import { base } from '../lib/base';
 
 countries.registerLocale(enLocale);
+const { presimplify, simplify } = topojsonSimplify;
 
 interface Props {
   /** alpha-2 code -> recipe count */
   highlighted: Record<string, number>;
   dots: { lat: number; lon: number; label: string; href: string }[];
+  /** Named points the search box can jump to. Projected here, not in the browser. */
+  placePoints?: { name: string; lat: number; lon: number }[];
 }
 
-const { highlighted, dots } = Astro.props;
+const { highlighted, dots, placePoints = [] } = Astro.props;
+
+/**
+ * world-atlas ships 110m and 50m. 110m is ~1/6th the weight but omits every
+ * country smaller than roughly Luxembourg — including Singapore, on a site
+ * called sg-recipe. 50m has 241 countries; unsimplified it would add ~560 KB
+ * gzipped of path data to the homepage, so we drop points below a weight
+ * threshold at build time. 0.02 keeps islands and real coastlines at ~143 KB.
+ */
+const topology = simplify(presimplify(structuredClone(worldRaw)), 0.02);
+const land = feature(topology as any, (topology as any).objects.countries) as any;
 
 const width = 960;
 const height = 500;
-const land = feature(world as any, (world as any).objects.countries) as any;
-const projection = geoEqualEarth().fitSize([width, height], { type: 'Sphere' } as any);
+/**
+ * Behrmann: cylindrical equal-area, standard parallels at ±30°.
+ *
+ * Chosen over Equal Earth for one decisive reason: Equal Earth is
+ * pseudocylindrical, so its ±180° boundary is a *curve* and the map spans
+ * 960·h(φ) at latitude φ — which makes horizontal looping impossible with a plain
+ * translate (it tears open by 960·(1-h) at each latitude). A cylindrical
+ * projection has a straight vertical boundary, so the world tiles exactly and
+ * looping costs nothing but a wrapped viewBox.
+ *
+ * d3-geo has no cylindrical equal-area built in, so the raw form is supplied
+ * directly: x = λ·cos(φ₀), y = sin(φ)/cos(φ₀). Area is preserved exactly, which
+ * was the reason for Equal Earth in the first place.
+ *
+ * φ₀ trades mid-latitude shape against polar stretch and map height. A cylindrical
+ * equal-area compresses horizontally by cos(φ₀)/cos(φ) at latitude φ, so the flat
+ * band sits at φ₀. At ±37.5° (Hobo-Dyer) India renders 27% too tall and narrow;
+ * at ±30° it is 13% off and the map is ~70px shorter, at the cost of ~9% more
+ * stretch at 60°N. Aspect works out at 2.36:1.
+ */
+const PHI0 = 30;
+const K = Math.cos((PHI0 * Math.PI) / 180);
+const projection = geoProjection((lambda: number, phi: number) => [lambda * K, Math.sin(phi) / K]).fitSize(
+  [width, height],
+  { type: 'Sphere' } as any,
+);
 const pathGen = geoPath(projection as any);
+
+/**
+ * Fit to the sphere's actual bounds rather than the nominal 960x500 box. The
+ * cylindrical sphere is 2.36:1, so the nominal box would leave a dead band above
+ * and below and squash Antarctica onto the bottom edge.
+ */
+const sphereBounds = pathGen.bounds({ type: 'Sphere' } as any) as [[number, number], [number, number]];
+const [vx0, vy0] = sphereBounds[0];
+const vx1 = sphereBounds[1][0];
+const vy1 = sphereBounds[1][1];
+
+/** Outer limit — how far the viewer can zoom out and pan. */
+const world = [vx0, vy0, vx1 - vx0, vy1 - vy0];
+const aspect = world[2] / world[3];
+
+/**
+ * Countries are stroked, and so is the map's own outer edge: Antarctica's ring
+ * closes along 90°S, and the rings of countries that meet the antimeridian close
+ * along ±180°. While the map exactly filled the frame those lines sat on the frame
+ * boundary and were invisible, but vertical padding now pulls the north and south
+ * edges inside the frame where the stroke shows as a hard rule.
+ *
+ * Clipping this much off the top and bottom removes the pole stroke, and costs no
+ * geography: every pixel along the map's top and bottom edge *is* the pole, a single
+ * point stretched into a line. At the deepest zoom it is ~20 CSS px, all of it
+ * inside 89.4°, which is an empty cap of ice. It must exceed half a stroke width in
+ * user units, which is widest when zoomed out on the narrowest screen: ~1.34 units
+ * on a 358px-wide viewport at full zoom-out.
+ */
+const EDGE_CLIP = 2;
+
+/**
+ * The opening view is the whole sphere, and reset returns here. A country can be
+ * framed instead, via ?country= or the search box, but the site is static: that
+ * query string exists only in the browser, so the client re-frames `home` itself
+ * before the first interaction rather than this rendering it.
+ */
+const viewBox = world.join(' ');
 
 function toAlpha2(id: string | number): string | undefined {
   try {
@@ -30,10 +106,128 @@ function toAlpha2(id: string | number): string | undefined {
   }
 }
 
+/**
+ * The path data in this component is ~91% of the rendered page, so coordinate
+ * precision is the single biggest lever available. d3 emits three decimals; at
+ * the fitted 960-unit width that is ~0.001 units, far finer than anything can
+ * draw, and the extra digits cost a lot of gzip entropy. Two decimals is still
+ * sub-pixel at the 12x maximum zoom, and drops the gzipped geometry ~17%.
+ */
+/**
+ * Per-country bounding boxes, the index the search box and ?country= frame against.
+ *
+ * Overseas territories make a naive box useless: France's reaches from the Caribbean
+ * to the Indian Ocean, the United States' past Hawaii, so framing them would show half
+ * a hemisphere. Only the largest single polygon counts, which yields metropolitan
+ * France and the contiguous 48. That also sidesteps the antimeridian — a country the
+ * seam splits contributes just its larger half, so no box straddles the map edge.
+ *
+ * Emitted to the page as JSON on the map element. Keyed by alpha-2, so names come
+ * free from the country-name table the page already inlines, and 235 boxes cost
+ * about 3 KB gzipped.
+ */
+const countryBoxes: Record<string, number[]> = {};
+for (const f of land.features as any[]) {
+  const code = toAlpha2(f.id);
+  if (!code || !f.geometry) continue;
+  const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+  let best: number[] | null = null;
+  let bestArea = -1;
+  for (const poly of polys) {
+    const b = pathGen.bounds({ type: 'Polygon', coordinates: poly }) as [[number, number], [number, number]];
+    const area = (b[1][0] - b[0][0]) * (b[1][1] - b[0][1]);
+    if (area > bestArea) {
+      bestArea = area;
+      best = [b[0][0], b[0][1], b[1][0], b[1][1]];
+    }
+  }
+  if (best) countryBoxes[code] = best.map((n) => +n.toFixed(1));
+}
+
+/**
+ * Named points — regions — as search targets, projected on the same terms as the
+ * country layer. A point has no extent, so the client frames it at a fixed zoom;
+ * what matters is that the projection happens here at build time rather than in the
+ * browser, where d3 is deliberately not shipped.
+ */
+const pointIndex: Record<string, number[]> = {};
+for (const p of placePoints) {
+  const c = projection([p.lon, p.lat]);
+  if (c) pointIndex[p.name.toLowerCase()] = [+c[0].toFixed(1), +c[1].toFixed(1)];
+}
+
+/**
+ * Ceiling on zoom, as a multiple of world width. The limit here is the data, not the
+ * code: the 50m country layer decimates hard at these scales, so microstates are a
+ * handful of points (Singapore and Bahrain are 4-point polygons, Malta and
+ * Luxembourg 8). Past ~12x you are magnifying a low-poly shape rather than revealing
+ * detail — see the README for the detail levers. Reaching 12x comfortably covers the
+ * small-but-real countries: Lebanon, Brunei, Trinidad and Cyprus all land at 25-35px
+ * wide.
+ *
+ * Lives here rather than in the browser script because the framed boxes below are
+ * computed against it, and those are build-time constants.
+ */
+const MAX_ZOOM = 12;
+const minWidth = world[2] / MAX_ZOOM;
+
+/**
+ * Frame a box in map units: fixed map aspect, uniform padding, floored span.
+ *
+ * The floor is load-bearing. A handful of microstates are four-point polygons with a
+ * literally zero-width bounding box — Singapore, Vatican, Guam — so without it the
+ * zoom divides by zero. It only needs to defeat that; too large a floor would cap
+ * every small country. Genuinely tiny places instead land on MAX_ZOOM via minWidth.
+ *
+ * Padding also keeps a framed country clear of the feathered edge: at FRAME_PAD it
+ * fills 1/1.4 = 71% of the frame in whichever dimension binds, inside the mask's 75%
+ * clear centre. That holds even at MAX_ZOOM, because minWidth / FRAME_PAD is exactly
+ * 71%. Raise FRAME_PAD and the mask has to follow, or countries grey at their edges.
+ */
+const FRAME_PAD = 1.4;
+const MIN_SPAN = 12;
+/** A named point has no extent of its own, so it gets a fixed zoom instead. */
+const POINT_ZOOM = 8;
+
+const fitFrame = (cx: number, cy: number, w: number, h: number): number[] => [
+  Math.min(Math.max(cx - w / 2, world[0]), world[0] + world[2] - w),
+  Math.min(Math.max(cy - h / 2, world[1]), world[1] + world[3] - h),
+  w,
+  h,
+];
+
+const frameBox = (b: number[]): number[] => {
+  const bw = Math.max(b[2] - b[0], MIN_SPAN);
+  const bh = Math.max(b[3] - b[1], MIN_SPAN);
+  const w = Math.min(world[2], Math.max(bw * FRAME_PAD, bh * FRAME_PAD * aspect, minWidth));
+  return fitFrame((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, w, w / aspect).map((n) => +n.toFixed(1));
+};
+
+/**
+ * Country frames and point frames, resolved at build time. Nothing about a frame
+ * depends on the browser — same projection, same aspect, same limits — so precomputing
+ * them keeps the framing math out of the page script entirely, and lets the inline
+ * script below set the opening view before the first paint rather than after it.
+ */
+const countryFrames: Record<string, number[]> = Object.fromEntries(
+  Object.entries(countryBoxes).map(([code, b]) => [code, frameBox(b)]),
+);
+
+const pointSpan = Math.min(world[2], Math.max(world[2] / POINT_ZOOM, minWidth));
+const pointFrames: Record<string, number[]> = Object.fromEntries(
+  Object.entries(pointIndex).map(([name, p]) => [name, fitFrame(p[0], p[1], pointSpan, pointSpan / aspect).map((n) => +n.toFixed(1))]),
+);
+
+const roundPath = (d: string) =>
+  d.replace(/-?\d+\.\d+/g, (n) => {
+    const r = Number(n).toFixed(2);
+    return r.replace(/\.?0+$/, '') || '0';
+  });
 
 const shapes = (land.features as any[]).flatMap((f) => {
-  const d = pathGen(f);
-  if (!d) return [];
+  const raw = pathGen(f);
+  if (!raw) return [];
+  const d = roundPath(raw);
   const code = toAlpha2(f.id);
   const count = code ? highlighted[code] : undefined;
   const name = (code && countries.getName(code, 'en')) || f.properties?.name || 'Unknown';
@@ -46,43 +240,202 @@ const points = dots.flatMap((dot) => {
 });
 ---
 
-<svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="World map of recipe origins" class="world-map">
-  {
-    shapes.map((s) =>
-      s.count ? (
-        <a href={`${base}?country=${s.code}`} aria-label={`${s.name} — ${s.count} recipe${s.count > 1 ? 's' : ''}`}>
-          <path d={s.d} class="has-recipes">
-            <title>{`${s.name} — ${s.count} recipe${s.count > 1 ? 's' : ''}`}</title>
-          </path>
-        </a>
-      ) : (
-        <path d={s.d}>
-          <title>{s.name}</title>
-        </path>
-      ),
-    )
-  }
-  {
-    points.map((p) => (
-      <a href={p.href} aria-label={p.label}>
-        <circle cx={p.x} cy={p.y} r="5" class="dot">
-          <title>{p.label}</title>
-        </circle>
-      </a>
-    ))
-  }
-</svg>
+<div
+  class="map-viewport"
+  data-map
+  data-map-world={world.join(' ')}
+  data-map-admin1={`${base}admin1.json`}
+  data-map-maxzoom={MAX_ZOOM}
+>
+  <svg
+    viewBox={viewBox}
+    role="group"
+    aria-label="World map of recipe origins. Use the arrow keys to pan, plus and minus to zoom."
+    tabindex="0"
+    class="world-map"
+  >
+    {/* Vertical-only clip, and deliberately much wider than the map so the wrapped
+        copy one world-width to the right is not clipped horizontally — the antimeridian
+        seam has to stay intact, only the poles are trimmed. See EDGE_CLIP. */}
+    <defs>
+      <clipPath id="map-vclip">
+        <rect
+          x={world[0] - world[2]}
+          y={world[1] + EDGE_CLIP}
+          width={world[2] * 3}
+          height={world[3] - 2 * EDGE_CLIP}
+        />
+      </clipPath>
+    </defs>
+    <g class="map-content" clip-path="url(#map-vclip)">
+      <g class="countries">
+        {
+          shapes.map((s) =>
+            s.count ? (
+              <a
+                href={`${base}?country=${s.code}`}
+                aria-label={`${s.name} — ${s.count} recipe${s.count > 1 ? 's' : ''}`}
+              >
+                <path d={s.d} class="has-recipes">
+                  <title>{`${s.name} — ${s.count} recipe${s.count > 1 ? 's' : ''}`}</title>
+                </path>
+              </a>
+            ) : (
+              <path d={s.d}>
+                <title>{s.name}</title>
+              </path>
+            ),
+          )
+        }
+      </g>
+      {/* Declared here rather than created in JS so that Astro's scoped styles
+          apply to it — a JS-created element carries no data-astro-cid attribute
+          and would silently fall back to the default SVG fill. */}
+      <path class="admin1" aria-hidden="true" />
+      <g class="markers">
+        {
+          points.map((p) => (
+            <a href={p.href} aria-label={p.label} class="marker">
+              {/* r is set in user units here so the map still reads without JS;
+                  the script then re-sizes both to a fixed number of screen px. */}
+              <circle cx={p.x} cy={p.y} r="16" class="marker-hit">
+                <title>{p.label}</title>
+              </circle>
+              <circle cx={p.x} cy={p.y} r="5" class="marker-dot" aria-hidden="true" />
+            </a>
+          ))
+        }
+      </g>
+    </g>
+    {/* Sits after the content group so the wrapped copy, which is cloned in and
+        inserted immediately after it at runtime, lands underneath this. */}
+    <g class="seam-erase" aria-hidden="true">
+      <line
+        x1={world[0]}
+        y1={world[1] + EDGE_CLIP}
+        x2={world[0]}
+        y2={world[1] + world[3] - EDGE_CLIP}
+      />
+      <line
+        x1={world[0] + world[2]}
+        y1={world[1] + EDGE_CLIP}
+        x2={world[0] + world[2]}
+        y2={world[1] + world[3] - EDGE_CLIP}
+      />
+    </g>
+  </svg>
+
+  <div class="map-controls" data-map-controls>
+    <button type="button" data-map-zoom="in" aria-label="Zoom in">+</button>
+    <button type="button" data-map-zoom="out" aria-label="Zoom out">−</button>
+    <button type="button" data-map-reset aria-label="Reset map view" hidden>reset</button>
+  </div>
+
+  {/* The place index, as JSON rather than a data attribute: attribute quoting inflates
+      the same payload by about a quarter, and there are no characters here that a
+      script block cannot carry raw. */}
+  <script
+    type="application/json"
+    data-map-places
+    is:inline
+    set:html={JSON.stringify({ c: countryFrames, p: pointFrames })}
+  />
+</div>
+
+{/*
+  Applies ?country= before the first paint.
+
+  The main script is bundled to an external module, so it cannot run until it has been
+  fetched; by then the whole-world view would already have been painted and the map
+  would visibly jump to the country you clicked. The frames are build-time constants,
+  so this needs no geometry and no duplicated math — just the index sitting above.
+  Runs inline, during parse, which is the only point early enough.
+*/}
+<script is:inline>
+  (() => {
+    const code = new URLSearchParams(location.search).get('country');
+    if (!code) return;
+    const self = document.currentScript;
+    const root = self && self.previousElementSibling;
+    if (!root || !root.matches || !root.matches('[data-map]')) return;
+    const index = root.querySelector('[data-map-places]');
+    let frames;
+    try {
+      frames = JSON.parse((index && index.textContent) || '{}').c;
+    } catch {
+      return;
+    }
+    const box = frames && frames[code.toUpperCase()];
+    if (box) root.querySelector('.world-map').setAttribute('viewBox', box.join(' '));
+  })();
+</script>
+
+<p class="map-hint">Scroll or pinch to zoom, drag to pan.</p>
 
 <style>
+  /* Escape the 42rem text measure. The map is the one graphic that deserves
+     the full width — a 2:1 world map in a text column reads as a ribbon. */
+  .map-viewport {
+    position: relative;
+    width: min(52rem, calc(100vw - 2rem));
+    left: 50%;
+    transform: translateX(-50%);
+    margin-block: 1.5rem;
+  }
   .world-map {
+    display: block;
     width: 100%;
     height: auto;
-    display: block;
+    /* Feather the edges so the hard viewBox crop reads as a curved plane rather
+       than a rectangle. Masking the svg itself (rather than laying a white
+       gradient over it) lets the fade reveal whatever is behind it, and keeps the
+       controls crisp.
+
+       The ellipse is inscribed (50% 50%) and the first stop is the binding constraint:
+       a radial gradient reaches full transparency at its radii, so any radius over 50%
+       leaves the map part-visible where the box cuts it (a hard edge), while too high a
+       clear centre eats into the edge of a country the search has just framed. Framing
+       pads by FRAME_PAD, so a framed country fills 1/1.4 = 71% of the frame in whichever
+       dimension binds — 75% clears that with headroom. Raise FRAME_PAD and this has to
+       follow, or countries start greying at their own borders.
+
+       Deliberately no blur: blurring thin lines at low alpha concentrates ink, so
+       dense border regions get MORE visible at the edges, not less. */
+    -webkit-mask-image: radial-gradient(
+      ellipse 50% 50% at 50% 50%,
+      #000 75%,
+      rgba(0, 0, 0, 0.5) 86%,
+      rgba(0, 0, 0, 0.14) 95%,
+      transparent 100%
+    );
+    mask-image: radial-gradient(
+      ellipse 50% 50% at 50% 50%,
+      #000 75%,
+      rgba(0, 0, 0, 0.5) 86%,
+      rgba(0, 0, 0, 0.14) 95%,
+      transparent 100%
+    );
+    cursor: grab;
+    touch-action: pan-y; /* one finger still scrolls the page vertically */
+    user-select: none;
+    -webkit-user-select: none;
+    outline-offset: 4px;
   }
+  .world-map.is-grabbing {
+    cursor: grabbing;
+  }
+  .world-map:focus-visible {
+    outline: 2px solid #000;
+  }
+
   .world-map path {
-    fill: #fff;
+    /* Hairlines that scale with the SVG land under a device pixel on narrow
+       screens and blur into grey. non-scaling-stroke keeps them crisp at every
+       size and every zoom level. */
+    vector-effect: non-scaling-stroke;
+    stroke-width: 1;
     stroke: #000;
-    stroke-width: 0.5;
+    fill: #fff;
   }
   .world-map path.has-recipes {
     fill: #000;
@@ -90,12 +443,583 @@ const points = dots.flatMap((dot) => {
   .world-map a:hover path {
     fill: #555;
   }
-  .world-map circle.dot {
+  .world-map a:focus-visible path {
+    fill: #555;
+    outline: 2px solid #000;
+  }
+
+  /* Country rings close along the map's rectangular edge, and the horizontal wrap
+     parks two of those closures right on the seam: Russia's ring runs down the
+     antimeridian for 5.4 units around 65–69°N, which is a 56px spur at maximum
+     zoom cutting through open ocean. Erasing a hairline there hides it. Drawn above
+     both tiles, so it covers the base tile's right edge and the wrapped copy's left
+     edge at once. Costs a ~1.5px notch where a coastline genuinely crosses 180°,
+     which is the better trade by a wide margin. */
+  .world-map .seam-erase line {
+    stroke: #fff;
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+  }
+
+  /* First-order administrative boundaries, injected lazily by the script. Only
+     shown once the view is narrower than ~40% of the world, because at world
+     scale 4,600 regions is noise rather than detail. */
+  .world-map path.admin1 {
+    fill: none;
+    stroke: #8c8c8c;
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+    pointer-events: none; /* drawn above the countries; must not eat their clicks */
+    opacity: 0;
+    transition: opacity 200ms ease;
+  }
+  .world-map.show-admin1 path.admin1 {
+    opacity: 1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .world-map path.admin1 {
+      transition: none;
+    }
+  }
+
+  .marker-hit {
+    fill: none;
+    pointer-events: all;
+  }  .marker-dot {
     fill: #000;
     stroke: #fff;
     stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+    pointer-events: none;
   }
-  .world-map a:hover circle.dot {
+  .marker:hover .marker-dot {
     fill: #555;
   }
+
+  .map-controls {
+    position: absolute;
+    top: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    gap: -1px;
+    font-family: inherit;
+  }
+  .map-controls button {
+    font: inherit;
+    font-size: 0.9rem;
+    line-height: 1;
+    min-width: 1.9rem;
+    min-height: 1.9rem; /* 30px, comfortably over the 24px minimum */
+    padding: 0.3rem 0.45rem;
+    border: 1px solid #000;
+    background: #fff;
+    color: #000;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  .map-controls button + button {
+    margin-top: -1px;
+  }
+  .map-controls button:hover {
+    background: #000;
+    color: #fff;
+  }
+  .map-controls button:focus-visible {
+    outline: 2px solid #000;
+    outline-offset: 1px;
+  }
+  .map-controls button[hidden] {
+    display: none;
+  }
+
+  .map-hint {
+    font-size: 0.8rem;
+    text-align: right;
+    margin: 0.4rem 0 1.5rem;
+  }
+
+  @media (max-width: 30rem) {
+    .map-hint {
+      text-align: left;
+    }
+  }
 </style>
+
+<script>
+  interface Vec {
+    x: number;
+    y: number;
+  }
+
+  for (const root of document.querySelectorAll<HTMLElement>('[data-map]')) {
+    const svg = root.querySelector('svg');
+    const resetBtn = root.querySelector<HTMLButtonElement>('[data-map-reset]');
+    if (!svg || !resetBtn) continue;
+
+    const admin1 = svg.querySelector<SVGPathElement>('path.admin1');
+    let admin1Ready = false;
+    let admin1D = '';
+    // Minimum CSS pixels per viewBox unit before the boundaries are worth drawing.
+    // Gating on rendered density rather than on zoom means the layer appears at the
+    // right point on a phone (map ~360px wide) and on a desktop (~830px) without
+    // either device ending up with a different visual density.
+    const ADMIN1_MIN_SCALE = 1.8;
+
+    const initial = (svg.getAttribute('viewBox') ?? '').split(/[\s,]+/).map(Number);
+    const world = (root.dataset.mapWorld ?? '').split(/[\s,]+/).map(Number);
+    if (initial.length !== 4 || world.length !== 4) continue;
+
+    const aspect = world[2] / world[3];
+    const minWidth = world[2] / (Number(root.dataset.mapMaxzoom) || 12);
+
+    const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+
+    const mod = (n: number, m: number) => ((n % m) + m) % m;
+
+    /**
+     * Precomputed frames: { c: alpha-2 code -> viewBox, p: place name -> viewBox }.
+     *
+     * Resolved at build time, because nothing about a frame depends on the browser.
+     * That keeps the framing math out of this script entirely — and it is what lets
+     * the inline script in the markup apply ?country= before the first paint, since
+     * this one is an external module and cannot run that early.
+     */
+    const places: { c: Record<string, number[]>; p: Record<string, number[]> } = JSON.parse(
+      root.querySelector('[data-map-places]')?.textContent ?? '{"c":{},"p":{}}',
+    );
+
+    /** Whatever was rendered is home, so reset returns to the view you arrived on. */
+    const home = initial;
+
+    let vb = home.slice();
+
+    const atHome = () => vb.every((v, i) => Math.abs(v - home[i]) < 0.5);
+
+    const pointers = new Map<number, Vec>();
+    let lastCentroid: Vec | null = null;
+    let lastSpread = 0;
+    let dragDistance = 0;
+    let capturing = false;
+    /** Un-resisted vertical position during a drag; vb[1] is derived from it. */
+    let panRaw = 0;
+
+    /**
+     * Longitude is cyclic, so panning east past the antimeridian should arrive back
+     * at the prime meridian rather than hitting a wall. The viewBox x wraps and a
+     * second copy of the map sits one world-width to the right to fill the wrapped
+     * sliver. This is exact only because the projection has a straight ±180
+     * boundary — see the note on PHI0 above.
+     *
+     * Latitude deliberately does NOT wrap. A cylindrical projection draws the pole as
+     * a whole edge rather than a point, so there is nothing above 90°N to reveal:
+     * wrapping would butt the north pole edge straight against the south pole edge.
+     * Vertical pan gets whitespace padding and a rubber band instead — see vPad.
+     */
+    const wrapX = (x: number) => world[0] + mod(x - world[0], world[2]);
+
+    const centroid = (): Vec => {
+      let x = 0;
+      let y = 0;
+      for (const p of pointers.values()) {
+        x += p.x;
+        y += p.y;
+      }
+      const n = pointers.size || 1;
+      return { x: x / n, y: y / n };
+    };
+
+    const spread = (): number => {
+      const [a, b] = [...pointers.values()];
+      return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+    };
+
+    /** User-space units per CSS pixel at the current zoom. */
+    const unitsPerPx = (box: DOMRect) => (box.width ? vb[2] / box.width : 1);
+
+    /**
+     * How far past each pole the map may settle, in user units. Latitude has no wrap
+     * to offer, so the sense of a hard wall is removed by letting the map drift into
+     * whitespace and springing back instead. Half a frame, which keeps the padding
+     * below one frame height — that is what guarantees the map can never be pushed
+     * entirely out of view. Capped so zooming right out cannot fling the world off
+     * screen; at the opening zoom the padding is 68 units against a 136-unit frame.
+     */
+    const vPad = () => Math.min(vb[3] * 0.5, world[3] * 0.25);
+
+    const panLimits = (): [number, number] => {
+      const pad = vPad();
+      return [world[1] - pad, world[1] + world[3] + pad - vb[3]];
+    };
+
+    const clampPan = () => {
+      // x is wrapped, not clamped — see wrapX.
+      const [lo, hi] = panLimits();
+      vb[1] = clamp(vb[1], lo, hi);
+      panRaw = vb[1];
+    };
+
+    /**
+     * While a drag is in flight the limit is soft. Resistance is applied to the
+     * total overshoot rather than incrementally — per-event resistance compounds
+     * and turns into a dead stop after a few pixels.
+     *
+     * The curve is 1:1 at the limit and asymptotes to RUBBER_SPAN frame-heights, so
+     * it eases off the moment you cross rather than jumping. Bounding the overshoot
+     * below half a frame means pad (half a frame) plus rubber (0.35) can never reach
+     * a full frame, so some of the map stays on screen even mid-drag. Release hands
+     * off to settle(), which eases it back into range.
+     */
+    const RUBBER_SPAN = 0.35;
+
+    const rubber = (over: number) => {
+      const span = vb[3] * RUBBER_SPAN;
+      return span * (1 - 1 / (1 + over / span));
+    };
+
+    const resistPan = () => {
+      const [lo, hi] = panLimits();
+      if (panRaw < lo) vb[1] = lo - rubber(lo - panRaw);
+      else if (panRaw > hi) vb[1] = hi + rubber(panRaw - hi);
+      else vb[1] = panRaw;
+    };
+
+    let motionRaf = 0;
+    const cancelMotion = () => {
+      if (motionRaf) cancelAnimationFrame(motionRaf);
+      motionRaf = 0;
+    };
+
+    const settle = () => {
+      cancelMotion();
+      const step = () => {
+        const [lo, hi] = panLimits();
+        const target = clamp(vb[1], lo, hi);
+        vb[1] += (target - vb[1]) * 0.22;
+        if (Math.abs(target - vb[1]) < 0.2) {
+          vb[1] = target;
+          panRaw = target;
+          motionRaf = 0;
+          apply();
+          return;
+        }
+        apply();
+        motionRaf = requestAnimationFrame(step);
+      };
+      motionRaf = requestAnimationFrame(step);
+    };
+
+    /** Keep markers a fixed size on screen rather than a fixed size in geography. */
+    const syncMarkers = () => {
+      const box = svg.getBoundingClientRect();
+      if (!box.width) return;
+      const k = unitsPerPx(box);
+      for (const el of svg.querySelectorAll('.marker-dot')) el.setAttribute('r', String(4 * k));
+      for (const el of svg.querySelectorAll('.marker-hit')) el.setAttribute('r', String(16 * k));
+    };
+
+    /** Boundaries only earn their keep once there is resolution to draw them. */
+    const syncVisibility = () => {
+      if (!admin1) return;
+      const box = svg.getBoundingClientRect();
+      const scale = box.width ? box.width / vb[2] : 0;
+      svg.classList.toggle('show-admin1', admin1Ready && scale >= ADMIN1_MIN_SCALE);
+    };
+
+    const apply = () => {
+      // Normalise before rendering: the viewBox must never start left of the map,
+      // because the filler copy only extends to the right.
+      vb[0] = wrapX(vb[0]);
+      svg.setAttribute('viewBox', vb.join(' '));
+      resetBtn.hidden = atHome();
+      syncVisibility();
+      syncMarkers();
+    };
+
+    const zoomAbout = (px: number, py: number, factor: number) => {
+      cancelMotion();
+      const w = clamp(vb[2] * factor, minWidth, world[2]);
+      const k = w / vb[2];
+      vb[0] = px - (px - vb[0]) * k;
+      vb[1] = py - (py - vb[1]) * k;
+      vb[2] = w;
+      vb[3] = w / aspect;
+      clampPan();
+      apply();
+    };
+
+    const toMap = (clientX: number, clientY: number): Vec => {
+      const box = svg.getBoundingClientRect();
+      return {
+        x: vb[0] + ((clientX - box.left) / box.width) * vb[2],
+        y: vb[1] + ((clientY - box.top) / box.height) * vb[3],
+      };
+    };
+
+    const centre = (): Vec => ({ x: vb[0] + vb[2] / 2, y: vb[1] + vb[3] / 2 });
+
+    /**
+     * Reset eases home rather than snapping. Jumping from a deep zoom back to the whole
+     * world in a single frame reads as a glitch, and the eye loses track of where it
+     * was. animateTo already picks the wrapped representative nearest the current view,
+     * which is what makes this correct when home sits at x=0 and you are away on the
+     * far side of the seam — a naive tween would sweep the long way round.
+     */
+    const reset = () => animateTo(home);
+
+    // --- pointer gestures: drag to pan, pinch to zoom --------------------------
+    svg.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if ((e.target as Element | null)?.closest?.('[data-map-controls]')) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 1) {
+        dragDistance = 0;
+        capturing = false;
+        cancelMotion();
+        panRaw = vb[1];
+      }
+      // Deliberately NOT capturing here: capturing on pointerdown retargets the
+      // following click to the <svg>, which would break every country link. We
+      // capture only once movement proves it is a drag, in pointermove.
+      lastCentroid = centroid();
+      lastSpread = spread();
+      svg.classList.add('is-grabbing');
+    });
+
+    svg.addEventListener('pointermove', (e) => {
+      const prev = pointers.get(e.pointerId);
+      if (!prev) return;
+      dragDistance += Math.hypot(e.clientX - prev.x, e.clientY - prev.y);
+      if (!capturing && dragDistance > 6) {
+        capturing = true;
+        svg.setPointerCapture(e.pointerId);
+      }
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      const box = svg.getBoundingClientRect();
+      if (!box.width || !lastCentroid) return;
+      const k = unitsPerPx(box);
+      const c = centroid();
+      const s = spread();
+
+      if (pointers.size >= 2 && s > 0 && lastSpread > 0) {
+        // Two fingers: pan by the centroid, then zoom about it.
+        vb[0] -= (c.x - lastCentroid.x) * k;
+        vb[1] -= (c.y - lastCentroid.y) * k;
+        const m = toMap(c.x, c.y);
+        zoomAbout(m.x, m.y, lastSpread / s);
+      } else if (pointers.size === 1) {
+        vb[0] -= (c.x - lastCentroid.x) * k;
+        panRaw -= (c.y - lastCentroid.y) * k;
+        resistPan();
+        apply();
+      }
+
+      lastCentroid = c;
+      lastSpread = s;
+    });
+
+    const release = (e: PointerEvent) => {
+      if (!pointers.delete(e.pointerId)) return;
+      if (svg.hasPointerCapture(e.pointerId)) svg.releasePointerCapture(e.pointerId);
+      if (pointers.size === 0) {
+        capturing = false;
+        svg.classList.remove('is-grabbing');
+        lastCentroid = null;
+        lastSpread = 0;
+        settle();
+      } else {
+        lastCentroid = centroid();
+        lastSpread = spread();
+      }
+    };
+
+    svg.addEventListener('pointerup', release);
+    svg.addEventListener('pointercancel', release);
+
+    // A drag that ends over a country link should not navigate.
+    svg.addEventListener(
+      'click',
+      (e) => {
+        if (dragDistance > 6) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        dragDistance = 0;
+      },
+      true,
+    );
+
+    // --- wheel / trackpad ------------------------------------------------------
+    svg.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        const scale = e.deltaMode === 1 ? 16 : 1;
+        const m = toMap(e.clientX, e.clientY);
+        zoomAbout(m.x, m.y, Math.exp(e.deltaY * scale * (e.ctrlKey ? 4 : 1) * 0.0022));
+      },
+      { passive: false },
+    );
+
+    svg.addEventListener('dblclick', (e) => {
+      const m = toMap(e.clientX, e.clientY);
+      zoomAbout(m.x, m.y, 1 / 1.8);
+    });
+
+    // --- keyboard --------------------------------------------------------------
+    svg.addEventListener('keydown', (e) => {
+      const k = unitsPerPx(svg.getBoundingClientRect());
+      const step = 48 * k;
+      const c = centre();
+      switch (e.key) {
+        case '+':
+        case '=':
+          zoomAbout(c.x, c.y, 1 / 1.4);
+          break;
+        case '-':
+        case '_':
+          zoomAbout(c.x, c.y, 1.4);
+          break;
+        case '0':
+          reset();
+          break;
+        case 'ArrowLeft':
+          vb[0] -= step;
+          clampPan();
+          apply();
+          break;
+        case 'ArrowRight':
+          vb[0] += step;
+          clampPan();
+          apply();
+          break;
+        case 'ArrowUp':
+          vb[1] -= step;
+          clampPan();
+          apply();
+          break;
+        case 'ArrowDown':
+          vb[1] += step;
+          clampPan();
+          apply();
+          break;
+        default:
+          return;
+      }
+      e.preventDefault();
+    });
+
+    // --- buttons ---------------------------------------------------------------
+    root.querySelector('[data-map-zoom="in"]')?.addEventListener('click', () => {
+      const c = centre();
+      zoomAbout(c.x, c.y, 1 / 1.5);
+    });
+    root.querySelector('[data-map-zoom="out"]')?.addEventListener('click', () => {
+      const c = centre();
+      zoomAbout(c.x, c.y, 1.5);
+    });
+    resetBtn.addEventListener('click', reset);
+
+    new ResizeObserver(() => {
+      syncMarkers();
+      syncVisibility();
+    }).observe(svg);
+
+    /**
+     * The wrapped copy of the map. Built by cloning at runtime rather than by
+     * shipping a second copy of the geometry — the path data is ~90% of the HTML and
+     * duplicating it would roughly double the page. The clone holds real <a>
+     * elements so wrapped countries stay clickable; it is hidden from assistive tech
+     * and removed from the tab order, because it is a visual duplicate rather than a
+     * second set of links.
+     */
+    const content = svg.querySelector('.map-content');
+    if (content) {
+      const ghost = content.cloneNode(true) as SVGGElement;
+      ghost.setAttribute('transform', `translate(${world[2]},0)`);
+      ghost.setAttribute('aria-hidden', 'true');
+      for (const a of ghost.querySelectorAll('a')) a.setAttribute('tabindex', '-1');
+      content.after(ghost);
+    }
+
+    /**
+     * Ease the view to a box.
+     *
+     * Horizontal wrap is the subtlety: the raw target can sit a whole world away
+     * from where we are, and tweening straight to it would sweep backwards across
+     * the entire map instead of forward through the seam. So snap the target to the
+     * representative nearest the current position first, and let apply() wrap it
+     * again at the end.
+     */
+    const animateTo = (target: number[]) => {
+      cancelMotion();
+      if (target.every((v, i) => Math.abs(v - vb[i]) < 0.5)) return;
+      const from = vb.slice();
+      let tx = target[0];
+      while (tx - from[0] > world[2] / 2) tx -= world[2];
+      while (from[0] - tx > world[2] / 2) tx += world[2];
+      const to = [tx, target[1], target[2], target[3]];
+      const t0 = performance.now();
+      const step = () => {
+        const t = Math.min(1, (performance.now() - t0) / 420);
+        const e = 1 - (1 - t) ** 3; // ease-out cubic
+        for (let i = 0; i < 4; i++) vb[i] = from[i] + (to[i] - from[i]) * e;
+        apply();
+        if (t < 1) {
+          motionRaf = requestAnimationFrame(step);
+        } else {
+          motionRaf = 0;
+          panRaw = vb[1];
+        }
+      };
+      motionRaf = requestAnimationFrame(step);
+    };
+
+    /**
+     * The page resolves whatever was typed against its own name tables — country
+     * names, region names — and asks the map to go there, naming a code or a place
+     * rather than sending any geometry. All the geometry lives here, because the
+     * projection runs at build time and d3 is deliberately not shipped to the browser.
+     */
+    root.addEventListener('map:focus', ((e: CustomEvent<{ code?: string; point?: string }>) => {
+      const d = e.detail ?? {};
+      const box = d.code ? places.c[d.code] : d.point ? places.p[d.point] : undefined;
+      if (box) animateTo(box);
+    }) as EventListener);
+
+    apply();
+
+    /**
+     * Administrative boundaries are ~84 KB gzipped, so they are fetched off the
+     * critical path rather than inlined with the country layer. The paths are
+     * pre-projected at build time, so nothing has to ship d3 to the browser; the
+     * only coupling is the fitted viewBox, which we check before inserting.
+     */
+    const loadAdmin1 = async () => {
+      const url = root.dataset.mapAdmin1;
+      if (!url) return;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+        const box: number[] = data.world ?? [];
+        if (box.length !== 4 || Math.abs(box[2] - world[2]) > 1 || Math.abs(box[3] - world[3]) > 1) {
+          console.warn(
+            '[sg-recipe] public/admin1.json was built for a different projection — re-run scripts/build-admin1.ts',
+          );
+          return;
+        }
+        admin1D = data.d ?? '';
+        for (const p of svg.querySelectorAll('path.admin1')) p.setAttribute('d', admin1D);
+        admin1Ready = true;
+        apply();
+      } catch {
+        /* the map is perfectly usable without the extra detail */
+      }
+    };
+
+    const onIdle = window.requestIdleCallback?.bind(window) ?? ((fn: () => void) => setTimeout(fn, 400));
+    onIdle(() => void loadAdmin1());
+  }
+</script>

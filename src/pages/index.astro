@@ -40,17 +40,37 @@ const index = recipes
     };
   })
   .sort((a, b) => a.title.localeCompare(b.title));
+
+/**
+ * Distinct regions that have a coordinate, as search targets for the map. The map
+ * projects these — the browser never sees d3, and geo.astro does not either.
+ */
+const regionPlaces = [...new Set(recipes.map((r) => r.data.region).filter((x): x is string => !!x))]
+  .map((name) => {
+    const info = (regions as Record<string, { lat: number; lon: number }>)[name.toLowerCase()];
+    return info ? { name, lat: info.lat, lon: info.lon } : null;
+  })
+  .filter((x): x is { name: string; lat: number; lon: number } => x !== null);
 ---
 
 <Base title="Recipes of the world">
   <h1>sg-recipe</h1>
-  <p>A cookbook of the world. Every recipe comes from someone, somewhere — click the map or search below.</p>
+  <p>A cookbook of the world. Every recipe comes from someone, somewhere — click the map or search above.</p>
 
-  <WorldMap highlighted={highlighted} dots={dots} />
-
+  {/* Sits directly above the map and spans the same width, because it drives the
+      map: typing a country or region flies the view there and filters the list to
+      match. One box rather than two. */}
   <p class="search-row">
-    <input id="q" type="search" placeholder="Search a dish, ingredient, or place…" aria-label="Search recipes" />
+    <input
+      id="q"
+      type="search"
+      placeholder="Search places, dishes, cuisines or ingredients"
+      aria-label="Search places and recipes"
+    />
   </p>
+
+  <WorldMap highlighted={highlighted} dots={dots} placePoints={regionPlaces} />
+
   <p id="filter-note" hidden></p>
 
   <ul id="results">
@@ -68,11 +88,70 @@ const index = recipes
     }
   </ul>
 
-  <script is:inline define:vars={{ index, base, allCountryNames: countries.getNames('en') }}>
+  <script
+    is:inline
+    define:vars={{
+      index,
+      base,
+      allCountryNames: countries.getNames('en'),
+      regionNames: regionPlaces.map((p) => p.name),
+    }}
+  >
     const params = new URLSearchParams(location.search);
     let country = params.get('country') ?? '';
     const q = document.getElementById('q');
     const note = document.getElementById('filter-note');
+    const map = document.querySelector('[data-map]');
+
+    /* The ISO name table is built for correctness, not for typing: "the United
+       States of America" is the official name, so "usa" matches nothing, and "uk" is
+       a unique prefix of "Ukraine" — a confident wrong answer, which is the worst
+       kind. A short alias list covers the names people actually reach for. Two-letter
+       codes already match exactly, so "us" needs no entry here. */
+    const ALIASES = {
+      usa: 'US',
+      america: 'US',
+      uk: 'GB',
+      britain: 'GB',
+      england: 'GB',
+      scotland: 'GB',
+      wales: 'GB',
+      uae: 'AE',
+      holland: 'NL',
+      burma: 'MM',
+      czechia: 'CZ',
+      swaziland: 'SZ',
+      'ivory coast': 'CI',
+    };
+
+    /* Every place the map can be sent to, flattened so one pass can rank it. Country
+       names come from the table the list filter already uses, regions from the
+       recipes, aliases on top. None of this knows any geometry — the map owns that,
+       and is asked for a code or a place name rather than a coordinate. */
+    const PLACES = [
+      ...Object.entries(allCountryNames).map(([code, name]) => ({ key: String(name).toLowerCase(), code })),
+      ...regionNames.map((name) => ({ key: name.toLowerCase(), point: name.toLowerCase() })),
+      ...Object.entries(ALIASES).map(([key, code]) => ({ key, code })),
+    ];
+
+    /* Deliberately refuses to guess. An exact name or code wins outright, which
+       settles the awkward ones: "niger" is both a country and the start of
+       "nigeria". A prefix only moves the map when it is unambiguous, so "jap" flies
+       to Japan while "in" matches six countries and is left alone until you type
+       more. The map moving is the only feedback there is, so a wrong guess would be
+       worse than none. */
+    function resolvePlace(raw) {
+      const needle = raw.trim().toLowerCase();
+      if (needle.length < 2) return null;
+      const exact = PLACES.filter((p) => p.key === needle || p.code?.toLowerCase() === needle);
+      if (exact.length) return exact.length === 1 ? exact[0] : null;
+      if (needle.length < 3) return null;
+      const prefix = PLACES.filter((p) => p.key.startsWith(needle));
+      if (prefix.length === 1) return prefix[0];
+      if (prefix.length > 1) return null;
+      const partial = PLACES.filter((p) => p.key.includes(needle));
+      return partial.length === 1 ? partial[0] : null;
+    }
 
     function apply() {
       const needle = q.value.trim().toLowerCase();
@@ -99,11 +178,38 @@ const index = recipes
       }
     }
 
-    q.addEventListener('input', apply);
+    let moveTimer = 0;
+    q.addEventListener('input', () => {
+      apply();
+      clearTimeout(moveTimer);
+      /* Debounced and separate from the list filter: filtering is cheap and should
+         feel instant, while flying the map is not something to do on every keystroke. */
+      moveTimer = setTimeout(() => {
+        const place = resolvePlace(q.value);
+        if (!place) return;
+        /* Keep the map and the list agreeing. Landing on ?country=JP and then typing
+           "india" would otherwise fly to India while the list stayed filtered to
+           Japan and showed nothing. */
+        country = place.code ?? '';
+        apply();
+        map?.dispatchEvent(
+          new CustomEvent('map:focus', {
+            detail: place.code ? { code: place.code } : { point: place.point },
+          }),
+        );
+      }, 160);
+    });
     apply();
   </script>
 
   <style>
+    .search-row {
+      /* Same breakout as the map, so the two share edges and read as one control. */
+      position: relative;
+      width: min(52rem, calc(100vw - 2rem));
+      left: 50%;
+      transform: translateX(-50%);
+    }
     .search-row input {
       width: 100%;
       font: inherit;
@@ -111,6 +217,11 @@ const index = recipes
       border: 1px solid #000;
       background: #fff;
       color: #000;
+    }
+    .search-row input:focus {
+      /* The browser's default ring is the one blue thing on the page. */
+      outline: 2px solid #000;
+      outline-offset: 1px;
     }
     #results {
       padding-left: 1.25rem;
