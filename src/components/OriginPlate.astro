@@ -1,0 +1,151 @@
+---
+import {
+  plateLand,
+  clippedPathGen,
+  world,
+  projection,
+  toAlpha2,
+  roundPath,
+  countryBoxes,
+  MIN_SPAN,
+  FRAME_PAD,
+} from '../lib/cartography';
+import regions from '../../data/regions.json';
+import { base } from '../lib/base';
+
+interface Props {
+  /** Alpha-2 codes the recipe claims. More than one is allowed (a shared origin). */
+  country: string[];
+  region?: string;
+  /** Human label, e.g. "India, Kerala", shown beneath the plate. */
+  label: string;
+}
+
+const { country, region, label } = Astro.props;
+
+/**
+ * A static, build-time locator: the world map cropped to the recipe's origin and
+ * rendered as an engraved plate, with no client script. It reuses the homepage's
+ * projection and simplified topology from lib/cartography.ts, so the shapes match
+ * the interactive map exactly; only the framing (a portrait plate rather than the
+ * 2.36:1 world strip) and the styling differ.
+ */
+
+/** Plate proportions. Wider than tall reads as a framed atlas plate, not a strip. */
+const PLATE_ASPECT = 1.2;
+
+/**
+ * Frame the origin box in the plate's aspect, padded so the country fills most of
+ * the frame. Kept here rather than reusing frameBox() because that is locked to the
+ * world aspect the homepage map needs.
+ */
+function plateFrame(b: number[]): number[] {
+  const bw = Math.max(b[2] - b[0], MIN_SPAN) * FRAME_PAD;
+  const bh = Math.max(b[3] - b[1], MIN_SPAN) * FRAME_PAD;
+  let w = Math.max(bw, bh * PLATE_ASPECT);
+  let h = w / PLATE_ASPECT;
+  if (h < bh) {
+    h = bh;
+    w = h * PLATE_ASPECT;
+  }
+  const cx = (b[0] + b[2]) / 2;
+  const cy = (b[1] + b[3]) / 2;
+  return [cx - w / 2, cy - h / 2, w, h];
+}
+
+const wanted = new Set(country);
+const boxes = country.map((c) => countryBoxes[c]).filter((b): b is number[] => Array.isArray(b));
+
+/** Union of the claimed countries' boxes; falls back to the whole world. */
+const originBox = boxes.length
+  ? [
+      Math.min(...boxes.map((b) => b[0])),
+      Math.min(...boxes.map((b) => b[1])),
+      Math.max(...boxes.map((b) => b[2])),
+      Math.max(...boxes.map((b) => b[3])),
+    ]
+  : null;
+
+const frame = originBox ? plateFrame(originBox) : world;
+const fw = frame[2];
+
+/**
+ * A path generator clipped to the frame: a country fully outside it emits nothing,
+ * one that overlaps emits only the visible sliver. That is both the crop and the size
+ * control, so no separate bounds test is needed.
+ */
+const platePath = clippedPathGen(frame);
+const visible = (plateLand.features as any[]).flatMap((f) => {
+  const raw = platePath(f);
+  if (!raw || raw.length < 4) return [];
+  const code = toAlpha2(f.id);
+  return [{ d: roundPath(raw), target: !!code && wanted.has(code) }];
+});
+
+/** The region dot, when the region has coordinates in data/regions.json. */
+const regionInfo = region ? (regions as Record<string, { lat: number; lon: number }>)[region.toLowerCase()] : null;
+const projected = regionInfo ? projection([regionInfo.lon, regionInfo.lat]) : null;
+const dot = projected ? { x: +projected[0].toFixed(1), y: +projected[1].toFixed(1) } : null;
+
+const href = originBox ? `${base}?country=${country[0]}` : base;
+---
+
+<a class="plate" href={href} aria-label={`Map of ${label} — open on the world map`}>
+  <svg class="plate-map" viewBox={frame.join(' ')} aria-hidden="true" preserveAspectRatio="xMidYMid meet">
+    {
+      visible.map((s) => (
+        <path d={s.d} class={s.target ? 'is-origin' : ''} />
+      ))
+    }
+    {dot && <circle cx={dot.x} cy={dot.y} r={+(fw / 55).toFixed(2)} class="plate-dot" aria-hidden="true" />}
+  </svg>
+  <span class="plate-caption">{label}</span>
+</a>
+
+<style>
+  .plate {
+    display: block;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  .plate-map {
+    display: block;
+    width: 100%;
+    height: auto;
+    /* A plate, not a screenshot: the water is the paper itself, so there is no
+       fill behind the SVG and the page's texture shows through. */
+    border: 1px solid var(--rule);
+    box-shadow: inset 0 0 0 3px var(--paper), inset 0 0 0 4px var(--rule);
+    background: transparent;
+  }
+  .plate-map path {
+    /* Hairline coasts that stay hairlines however the plate is scaled. */
+    vector-effect: non-scaling-stroke;
+    stroke-width: 1;
+    stroke: var(--coast);
+    fill: var(--land);
+  }
+  .plate-map path.is-origin {
+    fill: var(--accent);
+    fill-opacity: 0.85;
+  }
+  .plate-dot {
+    fill: var(--ink);
+    stroke: var(--paper);
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+  }
+  .plate-caption {
+    display: block;
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    font-variant-caps: small-caps;
+    letter-spacing: 0.1em;
+    text-align: center;
+    color: var(--accent);
+  }
+  .plate:hover .plate-caption {
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+  }
+</style>

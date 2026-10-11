@@ -3,6 +3,7 @@ import { getCollection, render } from 'astro:content';
 import countries from 'i18n-iso-countries';
 import enLocale from 'i18n-iso-countries/langs/en.json';
 import Base from '../../layouts/Base.astro';
+import OriginPlate from '../../components/OriginPlate.astro';
 
 countries.registerLocale(enLocale);
 
@@ -81,6 +82,14 @@ const hasGroups = groups.size > 1 || (groups.size === 1 && !groups.has(''));
       )}
     </dl>
 
+    <aside class="locator">
+      <OriginPlate
+        country={d.country}
+        region={d.region}
+        label={`${countryNames}${d.region ? `, ${d.region}` : ''}`}
+      />
+    </aside>
+
     <h2>Ingredients</h2>
     {
       [...groups.entries()].map(([group, items]) => (
@@ -131,6 +140,28 @@ const hasGroups = groups.size > 1 || (groups.size === 1 && !groups.has(''));
     .credit {
       font-size: 0.92rem;
       font-style: italic;
+    }
+
+    /* On wide screens the article is 42rem centred and the right margin is empty
+       paper, so the locator lives there, fixed while the recipe scrolls. Below the
+       threshold it stacks, right after the metadata where "where this is from"
+       already sits. */
+    .locator {
+      margin: 1.5rem 0 0.5rem;
+    }
+    @media (min-width: 80rem) {
+      /* Parked in the article's right margin but in normal flow, so it scrolls away
+         with the recipe rather than following the reader down the page. */
+      article {
+        position: relative;
+      }
+      .locator {
+        position: absolute;
+        top: 0;
+        left: 100%;
+        margin: 0 0 0 1.5rem;
+        width: 16rem;
+      }
     }
   </style>
 </Base>
