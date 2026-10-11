@@ -373,13 +373,10 @@ const points = dots.flatMap((dot) => {
 <p class="map-hint">Scroll or pinch to zoom, drag to pan.</p>
 
 <style>
-  /* Escape the 42rem text measure. The map is the one graphic that deserves
-     the full width — a 2:1 world map in a text column reads as a ribbon. */
+  /* Kept within the text measure rather than escaping to the full width, so the
+     map shares its edges with the search box above it and the text column. */
   .map-viewport {
     position: relative;
-    width: min(52rem, calc(100vw - 2rem));
-    left: 50%;
-    transform: translateX(-50%);
     margin-block: 1.5rem;
   }
   .world-map {
@@ -987,6 +984,10 @@ const points = dots.flatMap((dot) => {
       const box = d.code ? places.c[d.code] : d.point ? places.p[d.point] : undefined;
       if (box) animateTo(box);
     }) as EventListener);
+
+    /* The page asks for this when the search box is emptied; it is the same home
+       the reset button returns to, so there is one definition of "no filter". */
+    root.addEventListener('map:reset', () => reset());
 
     apply();
 

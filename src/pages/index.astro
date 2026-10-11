@@ -98,16 +98,20 @@ const regionPlaces = [...new Set(recipes.map((r) => r.data.region).filter((x): x
     }}
   >
     const params = new URLSearchParams(location.search);
-    let country = params.get('country') ?? '';
+    /* The country from the URL is the floor the search falls back to: a search
+       that names no place filters by text within it. */
+    const initialCountry = params.get('country') ?? '';
+    let country = initialCountry;
     const q = document.getElementById('q');
     const note = document.getElementById('filter-note');
     const map = document.querySelector('[data-map]');
 
     /* The ISO name table is built for correctness, not for typing: "the United
-       States of America" is the official name, so "usa" matches nothing, and "uk" is
-       a unique prefix of "Ukraine" — a confident wrong answer, which is the worst
-       kind. A short alias list covers the names people actually reach for. Two-letter
-       codes already match exactly, so "us" needs no entry here. */
+       States of America" is the official name, so "usa" matches nothing. A short
+       alias list covers the names people actually reach for. Two-letter codes are
+       deliberately not matched by the search at all — a code fires the moment you
+       type the first two letters of any word ("ch" is Switzerland), so there is no
+       "us" entry here. */
     const ALIASES = {
       usa: 'US',
       america: 'US',
@@ -134,23 +138,19 @@ const regionPlaces = [...new Set(recipes.map((r) => r.data.region).filter((x): x
       ...Object.entries(ALIASES).map(([key, code]) => ({ key, code })),
     ];
 
-    /* Deliberately refuses to guess. An exact name or code wins outright, which
-       settles the awkward ones: "niger" is both a country and the start of
-       "nigeria". A prefix only moves the map when it is unambiguous, so "jap" flies
-       to Japan while "in" matches six countries and is left alone until you type
-       more. The map moving is the only feedback there is, so a wrong guess would be
-       worse than none. */
+    /* Deliberately refuses to guess: only a whole place name resolves, and only once
+       it is three characters long. Anything looser flies the map mid-word, because a
+       partial name is a trap — "ch" is the code for Switzerland and "chi" is a
+       unique prefix of Chile, so typing "chicken" paused on one of them and left the
+       list filtered to a country with no recipes. Substrings are worse still: "indian"
+       lands on the British Indian Ocean Territory. Two-letter codes are not matched at
+       all, for the same reason. The map moving is only ever a convenience, so a wrong
+       guess is worse than none. */
     function resolvePlace(raw) {
       const needle = raw.trim().toLowerCase();
-      if (needle.length < 2) return null;
-      const exact = PLACES.filter((p) => p.key === needle || p.code?.toLowerCase() === needle);
-      if (exact.length) return exact.length === 1 ? exact[0] : null;
       if (needle.length < 3) return null;
-      const prefix = PLACES.filter((p) => p.key.startsWith(needle));
-      if (prefix.length === 1) return prefix[0];
-      if (prefix.length > 1) return null;
-      const partial = PLACES.filter((p) => p.key.includes(needle));
-      return partial.length === 1 ? partial[0] : null;
+      const exact = PLACES.filter((p) => p.key === needle);
+      return exact.length === 1 ? exact[0] : null;
     }
 
     function apply() {
@@ -180,18 +180,26 @@ const regionPlaces = [...new Set(recipes.map((r) => r.data.region).filter((x): x
 
     let moveTimer = 0;
     q.addEventListener('input', () => {
+      const needle = q.value.trim();
+      /* Resolve, and recompute the country filter, synchronously — the list must
+         never lag behind the term. A place narrows the filter to its country; a term
+         that names no place falls back to the country from the URL, so a name that is
+         edited past the place it once matched cannot strand the list. Emptying the
+         box clears the filter outright. */
+      const place = needle ? resolvePlace(needle) : null;
+      country = needle ? (place?.code ?? initialCountry) : '';
       apply();
+
       clearTimeout(moveTimer);
-      /* Debounced and separate from the list filter: filtering is cheap and should
-         feel instant, while flying the map is not something to do on every keystroke. */
+      /* Only the map move is debounced: filtering is cheap and should feel instant,
+         while flying the map is not something to do on every keystroke. */
       moveTimer = setTimeout(() => {
-        const place = resolvePlace(q.value);
+        /* Emptying the box sends the map home, so map and list agree on "everything". */
+        if (!needle) {
+          map?.dispatchEvent(new CustomEvent('map:reset'));
+          return;
+        }
         if (!place) return;
-        /* Keep the map and the list agreeing. Landing on ?country=JP and then typing
-           "india" would otherwise fly to India while the list stayed filtered to
-           Japan and showed nothing. */
-        country = place.code ?? '';
-        apply();
         map?.dispatchEvent(
           new CustomEvent('map:focus', {
             detail: place.code ? { code: place.code } : { point: place.point },
@@ -204,11 +212,9 @@ const regionPlaces = [...new Set(recipes.map((r) => r.data.region).filter((x): x
 
   <style>
     .search-row {
-      /* Same breakout as the map, so the two share edges and read as one control. */
-      position: relative;
-      width: min(52rem, calc(100vw - 2rem));
-      left: 50%;
-      transform: translateX(-50%);
+      /* Sits in the text measure: the search box drives the map, so they share
+         edges with the column and read as one control. */
+      margin: 1.5rem 0;
     }
     .search-row input {
       width: 100%;
