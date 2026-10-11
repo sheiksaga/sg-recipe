@@ -425,7 +425,7 @@ const points = dots.flatMap((dot) => {
     cursor: grabbing;
   }
   .world-map:focus-visible {
-    outline: 2px solid #000;
+    outline: 2px solid var(--accent);
   }
 
   .world-map path {
@@ -434,18 +434,18 @@ const points = dots.flatMap((dot) => {
        size and every zoom level. */
     vector-effect: non-scaling-stroke;
     stroke-width: 1;
-    stroke: #000;
-    fill: #fff;
+    stroke: var(--coast);
+    fill: var(--land);
   }
   .world-map path.has-recipes {
-    fill: #000;
+    fill: var(--ink);
   }
   .world-map a:hover path {
-    fill: #555;
+    fill: var(--accent);
   }
   .world-map a:focus-visible path {
-    fill: #555;
-    outline: 2px solid #000;
+    fill: var(--accent);
+    outline: 2px solid var(--accent);
   }
 
   /* Country rings close along the map's rectangular edge, and the horizontal wrap
@@ -456,7 +456,7 @@ const points = dots.flatMap((dot) => {
      edge at once. Costs a ~1.5px notch where a coastline genuinely crosses 180°,
      which is the better trade by a wide margin. */
   .world-map .seam-erase line {
-    stroke: #fff;
+    stroke: var(--paper);
     stroke-width: 1.5;
     vector-effect: non-scaling-stroke;
   }
@@ -466,7 +466,7 @@ const points = dots.flatMap((dot) => {
      scale 4,600 regions is noise rather than detail. */
   .world-map path.admin1 {
     fill: none;
-    stroke: #8c8c8c;
+    stroke: var(--aged-line);
     stroke-width: 1;
     vector-effect: non-scaling-stroke;
     pointer-events: none; /* drawn above the countries; must not eat their clicks */
@@ -486,14 +486,14 @@ const points = dots.flatMap((dot) => {
     fill: none;
     pointer-events: all;
   }  .marker-dot {
-    fill: #000;
-    stroke: #fff;
+    fill: var(--accent);
+    stroke: var(--paper);
     stroke-width: 1.5;
     vector-effect: non-scaling-stroke;
     pointer-events: none;
   }
   .marker:hover .marker-dot {
-    fill: #555;
+    fill: var(--ink);
   }
 
   .map-controls {
@@ -512,9 +512,9 @@ const points = dots.flatMap((dot) => {
     min-width: 1.9rem;
     min-height: 1.9rem; /* 30px, comfortably over the 24px minimum */
     padding: 0.3rem 0.45rem;
-    border: 1px solid #000;
-    background: #fff;
-    color: #000;
+    border: 1px solid var(--rule);
+    background: rgba(255, 252, 240, 0.6);
+    color: var(--ink);
     cursor: pointer;
     touch-action: manipulation;
   }
@@ -522,11 +522,11 @@ const points = dots.flatMap((dot) => {
     margin-top: -1px;
   }
   .map-controls button:hover {
-    background: #000;
-    color: #fff;
+    background: var(--accent);
+    color: var(--paper);
   }
   .map-controls button:focus-visible {
-    outline: 2px solid #000;
+    outline: 2px solid var(--accent);
     outline-offset: 1px;
   }
   .map-controls button[hidden] {

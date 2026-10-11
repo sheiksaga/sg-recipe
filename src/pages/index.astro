@@ -213,24 +213,34 @@ const regionPlaces = [...new Set(recipes.map((r) => r.data.region).filter((x): x
     .search-row input {
       width: 100%;
       font: inherit;
-      padding: 0.4rem 0.5rem;
-      border: 1px solid #000;
-      background: #fff;
-      color: #000;
+      padding: 0.45rem 0.55rem;
+      border: 1px solid var(--rule);
+      /* Prints onto the sheet rather than sitting on top of it — a form filled in
+         by hand, so it takes a little of the paper's own warmth. */
+      background: rgba(255, 252, 240, 0.5);
+      color: var(--ink);
+    }
+    .search-row input::placeholder {
+      color: var(--rule);
+      font-style: italic;
     }
     .search-row input:focus {
       /* The browser's default ring is the one blue thing on the page. */
-      outline: 2px solid #000;
+      outline: 2px solid var(--accent);
       outline-offset: 1px;
     }
     #results {
       padding-left: 1.25rem;
     }
+    #results li::marker {
+      color: var(--accent);
+    }
     #results li {
-      margin: 0.35rem 0;
+      margin: 0.4rem 0;
     }
     .where {
-      font-size: 0.9rem;
+      font-size: 0.92rem;
+      font-style: italic;
     }
   </style>
 </Base>

@@ -12,29 +12,134 @@ const { title } = Astro.props;
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title} — sg-recipe</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;1,400&family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&display=swap"
+    />
     <style>
-      :root { color-scheme: light; }
+      :root {
+        color-scheme: light;
+
+        /* Aged paper, near-black ink, one faded brick accent. The accent is the
+           only saturated thing on the page, so it marks endings, rules and the
+           drop cap without ever becoming decoration. */
+        --paper: #f4ecd8;
+        --ink: #201a14;
+        --accent: #8c3b2e;
+        --rule: rgba(32, 26, 20, 0.4);
+
+        /* Map-only tones: land sits a shade below the paper so continents read as
+           printed rather than as empty page, and the coast line is softer than ink. */
+        --land: #eadfc7;
+        --coast: rgba(32, 26, 20, 0.55);
+        --aged-line: #c3b291;
+
+        --display: 'IM Fell English', 'Iowan Old Style', Georgia, serif;
+        --display-sc: 'IM Fell English SC', 'IM Fell English', Georgia, serif;
+        --body: 'Crimson Pro', Georgia, 'Times New Roman', serif;
+      }
       * { box-sizing: border-box; }
+      /* Paper, not a flat fill: a fine grain and a slow mottle sit over the base
+         tone, with warm light falling from the top and the corners pulling down.
+         All of it is CSS plus an inline SVG turbulence tile — there is no image to
+         download, and it stays crisp at any zoom.
+
+         It lives on <html>, not <body>: the body is the 42rem text column, so a
+         background there would stop at the measure and leave white gutters on a
+         wide screen. The root element's background propagates to the whole canvas,
+         so the sheet is full-bleed and the text sits on it. `fixed` keeps the paper
+         still while the text scrolls across it. */
+      html {
+        background-color: var(--paper);
+        background-image:
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='260' height='260' filter='url(%23g)' opacity='0.055'/%3E%3C/svg%3E"),
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='700' height='700'%3E%3Cfilter id='m'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='700' height='700' filter='url(%23m)' opacity='0.05'/%3E%3C/svg%3E"),
+          radial-gradient(130% 100% at 50% 0%, rgba(255, 252, 240, 0.5) 0%, rgba(255, 252, 240, 0) 45%),
+          radial-gradient(120% 90% at 50% 100%, rgba(88, 66, 36, 0.12) 0%, rgba(88, 66, 36, 0) 60%);
+        background-attachment: fixed;
+      }
       body {
-        font-family: Georgia, 'Times New Roman', 'Nimbus Roman', serif;
-        color: #000;
-        background: #fff;
+        font-family: var(--body);
+        font-size: 1.06rem;
+        color: var(--ink);
         max-width: 42rem;
         margin: 0 auto;
-        padding: 2rem 1.25rem 4rem;
-        line-height: 1.55;
+        padding: 2.5rem 1.25rem 4rem;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
       }
-      a { color: #000; text-decoration: underline; }
-      a:hover { background: #000; color: #fff; text-decoration: none; }
-      h1 { font-size: 1.6rem; letter-spacing: 0.02em; }
-      h1, h2, h3 { font-weight: normal; }
-      nav { display: flex; justify-content: space-between; border-bottom: 1px solid #000; padding-bottom: 0.5rem; margin-bottom: 2rem; }
+      a {
+        color: var(--ink);
+        text-decoration: underline;
+        text-decoration-color: var(--rule);
+        text-underline-offset: 0.14em;
+      }
+      a:hover {
+        color: var(--accent);
+        text-decoration-color: currentColor;
+      }
+
+      h1, h2, h3 {
+        font-family: var(--display);
+        font-weight: normal;
+        letter-spacing: 0.01em;
+      }
+      h1 { font-size: 2rem; line-height: 1.12; margin: 0.2em 0 0.6em; }
+      h2 { font-size: 1.45rem; margin: 2.2rem 0 0.7rem; }
+      /* A short double rule under each section head, the way a printed recipe is
+         set off from the text that follows it. */
+      h2::after {
+        content: '';
+        display: block;
+        width: 2.4rem;
+        margin-top: 0.35rem;
+        border-top: 3px double var(--accent);
+      }
+      h3 { font-size: 1.2rem; }
+
+      nav {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        font-family: var(--display-sc);
+        letter-spacing: 0.1em;
+        border-bottom: 3px double var(--rule);
+        padding-bottom: 0.6rem;
+        margin-bottom: 2.5rem;
+      }
       nav a { text-decoration: none; }
-      footer { margin-top: 4rem; border-top: 1px solid #000; padding-top: 0.5rem; font-size: 0.85rem; }
-      dl.meta { display: grid; grid-template-columns: auto 1fr; gap: 0.1rem 1rem; }
-      dl.meta dt { font-weight: bold; }
+      nav a:hover { color: var(--accent); }
+
+      footer {
+        margin-top: 4rem;
+        border-top: 3px double var(--rule);
+        padding-top: 0.7rem;
+        font-size: 0.9rem;
+        font-variant-caps: small-caps;
+        letter-spacing: 0.04em;
+      }
+
+      dl.meta {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.15rem 1rem;
+        margin: 1.5rem 0;
+      }
+      dl.meta dt {
+        font-variant-caps: small-caps;
+        letter-spacing: 0.07em;
+        font-weight: 600;
+      }
       dl.meta dd { margin: 0; }
-      hr { border: none; border-top: 1px solid #000; margin: 2rem 0; }
+
+      hr {
+        border: none;
+        border-top: 3px double var(--rule);
+        margin: 2.5rem 0;
+      }
     </style>
   </head>
   <body>

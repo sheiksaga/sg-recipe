@@ -106,13 +106,31 @@ const hasGroups = groups.size > 1 || (groups.size === 1 && !groups.has(''));
   </article>
 
   <style>
+    /* Drop cap on the opening instruction. The markdown paragraphs render as
+       direct children of the article, so the first <p> is the start of the
+       method; the brick initial marks where the reading begins. */
+    article > p:first-of-type::first-letter {
+      font-family: var(--display);
+      float: left;
+      font-size: 3.6em;
+      line-height: 0.72;
+      padding: 0.06em 0.1em 0 0;
+      color: var(--accent);
+    }
+
+    /* Ingredient group labels are sub-heads, so small caps in the body face keeps
+       them quiet beside the display-face h2s. */
     h3 {
-      text-transform: capitalize;
-      font-size: 1rem;
-      margin-bottom: 0.25rem;
+      font-family: var(--body);
+      font-variant-caps: small-caps;
+      letter-spacing: 0.08em;
+      font-size: 1.18rem;
+      margin: 1.1rem 0 0.3rem;
+      color: var(--accent);
     }
     .credit {
-      font-size: 0.9rem;
+      font-size: 0.92rem;
+      font-style: italic;
     }
   </style>
 </Base>
